@@ -1,0 +1,142 @@
+esphome:
+  name: wskaznikpv
+  platform: ESP32
+  board: esp32dev
+  on_boot:
+    priority: 500
+    then:
+      - light.turn_on:
+          id: led_strip
+          effect: "PV_state"
+          #brightness: 50%
+    
+api:
+ 
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: 192.168.1.22
+    gateway: 192.168.1.1
+    subnet: 255.255.255.0
+
+logger:
+  level: VERBOSE
+  baud_rate: 0
+
+ota:
+  password: "***********************"
+
+sensor:
+  - platform: homeassistant
+    id: power_all
+    name: "Moc fotowoltaiki all"
+    unit_of_measurement: W
+    accuracy_decimals: 2
+    entity_id: sensor.t_series_generation_power # Ustaw identyfikator encji z Home Assistant, który zawiera sumę mocy PV1 i PV2
+    filters:
+      - lambda: |-
+          if(x >= 0 && x <= 8000){
+            return x;
+          } else {
+            return NAN;
+          }
+  - platform: homeassistant
+    id: power1
+    name: "Moc fotowoltaiki string 1"
+    unit_of_measurement: W
+    accuracy_decimals: 2
+    entity_id: sensor.t_series_pv1_power # Ustaw identyfikator encji z Home Assistant, który zawiera sumę mocy PV1 i PV2
+    filters:
+      - lambda: |-
+          if(x >= 0 && x <= 8000){
+            return x;
+          } else {
+            return NAN;
+          }
+  - platform: homeassistant
+    id: power2
+    name: "Moc fotowoltaiki string 2"
+    unit_of_measurement: W
+    accuracy_decimals: 2
+    entity_id: sensor.t_series_pv2_power
+    filters:
+      - lambda: |-
+          if(x >= 0 && x <= 8000){
+            return x;
+          } else {
+            return NAN;
+          }
+    
+text_sensor:
+  - platform: homeassistant
+    id: inv_on
+    name: "inverter - status"
+    entity_id: sensor.t_series_inverter_mode
+    
+globals:
+  - id: led_color
+    type: Color
+    restore_value: no
+    initial_value: 'Color(0, 0, 0)'
+
+# Podłącz pasek LED do pinu GPIO
+light:
+  - platform: esp32_rmt_led_strip
+    chipset: WS2812
+    pin: GPIO25
+    num_leds: 16 # Liczba diod LED na pasku
+    rgb_order: GRB
+    rmt_channel: 0
+    name: "Pasek LED fotowoltaiki"
+    id: led_strip
+    effects:
+      - addressable_lambda:
+          name: "PV_state"
+          update_interval: 5s
+          lambda: |-
+            // pobierz moc paneli z ha
+            float pvpower;
+            if(id(inv_on).state == "Online"){
+                pvpower = id(power_all).state;
+            } else {
+                pvpower = 0;
+            }
+            // pvpower = 4777.0;
+
+            // Oblicz liczbę diod LED do zapalenia proporcjonalnie do mocy (maksymalna moc falownika to 8000 W)
+            int num_leds_on = round(pvpower / 8000.0 * it.size());
+            
+            // zmapuj moc do kolorow
+            int red = map(pvpower, 0, 8000, 0, 255);
+            int green = map(pvpower, 0, 8000, 255, 0);
+            int blue = 0;
+
+            // przypisz kolor
+            id(led_color) = Color(red, green, blue);
+
+            // Oblicz jasność diod LED proporcjonalnie do reszty mocy (wartość od 0 do 1)
+            float bright = fmod(pvpower, (8000.0 / it.size())) / (8000.0 / it.size());
+
+            // Zapal odpowiednią liczbę diod LED z danym kolorem i jasnością, a resztę wyłącz
+            for (int i = 0; i < it.size(); i++) {
+              if (i < num_leds_on) {
+                it[i] = id(led_color);
+              } else if (i == num_leds_on){
+                it[i] = Color(round(red * bright), round(green * bright), round(blue * bright));
+              } else {
+                it[i] = Color(0, 0, 0);
+              }
+            }
+
+            // Zatwierdź zmiany na pasku LED
+            // it.schedule_show();
+
+            // debugowanie
+            for (int j = 0; j < it.size(); j++){
+                ESP_LOGD("lambda", "LED%d: %d, %d, %d %d", j,
+                it[j].get_red(),
+                it[j].get_green(),
+                it[j].get_blue()),
+                pvpower;
+            }
